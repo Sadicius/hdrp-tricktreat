@@ -3,6 +3,8 @@ Config = {}
 Config.FadeIn           = true
 Config.DistanceSpawn    = 20.0
 
+Config.UseTarget            = false -- u can choose prompt too xP 
+
 Config.Trollprevent         = 30.0 -- dont ever select treat
 
 Config.RadiusEvent          = 30.0
@@ -13,6 +15,7 @@ Config.weaponhalloween      = 99 -- % give weapons
 Config.outfithChange        = true
 Config.clownsuithalloween   = true -- true or false -- link https://forum.cfx.re/t/free-clown-suit-halloween-special/5273104
 Config.clownsuit            = 50.0 -- % appearance Clow Terror
+
 
 -- Reward
 Config.AmountMin = 1
