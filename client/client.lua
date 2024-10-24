@@ -2,6 +2,7 @@ local RSGCore = exports['rsg-core']:GetCoreObject()
 local spawnedPeds = {}
 local spawnedProps = {}
 local isInteracting = false
+local hasInteracted = false
 
 --------------------------------------
 -- Message Trick Random
@@ -181,98 +182,284 @@ local function npcGiveObject(npc, object, objectB, key)
     StopAnimation(npc,'mini_games@blackjack_mg@dealer@self@cleanup', 'cleanup_discard')
     ClearPedTasks(npc)
 end
-local hasInteracted = false
+
+
+
+--------------------------
+-- prompts functions (if ure set target = true on config file, thats funcs never gonna existing!)
+--------------------------
+
+if not Config.UseTarget then
+
+    local PromptGroups = {}
+
+    function CreatePromptGroup(group, label, coords, prompts)
+        if (PromptGroups[group] == nil) then
+            PromptGroups[group] = {}
+            PromptGroups[group].coords = coords
+            PromptGroups[group].label = label
+            PromptGroups[group].group = group
+            PromptGroups[group].active = false
+            PromptGroups[group].created = false
+            PromptGroups[group].prompts = prompts
+        else
+            print('Prompt with this name: "' .. group .. '" already exists!')
+        end
+    end
+
+    local function setupPromptGroup(prompt)
+        for k,v in pairs(prompt.prompts) do
+            local str = CreateVarString(10, 'LITERAL_STRING', v.text)
+            v.prompt = Citizen.InvokeNative(0x04F97DE45A519419, Citizen.ReturnResultAnyway())
+            Citizen.InvokeNative(0xB5352B7494A08258, v.prompt, v.key)
+            Citizen.InvokeNative(0x5DD02A8318420DD7, v.prompt, str)
+            Citizen.InvokeNative(0x8A0FB4D03A630D21, v.prompt, true)
+            Citizen.InvokeNative(0x71215ACCFDE075EE, v.prompt, true)
+            Citizen.InvokeNative(0x94073D5CA3F16B7B, v.prompt, 1000) 
+            Citizen.InvokeNative(0x2F11D3A254169EA4, v.prompt, prompt.group, 0)
+            Citizen.InvokeNative(0xF7AA2696A22AD8B9, v.prompt)
+        end
+
+        prompt.created = true
+    end
+
+    function PromptGroupHasBeenCreated(name)
+        if PromptGroups[name] then
+            return true
+        end
+        return false
+    end
+
+    function DeletePromptGroup(name)
+        if PromptGroups and PromptGroups[name] then
+            for k,v in pairs(PromptGroups[name].prompts) do
+                UiPromptDelete(v.prompt)
+            end
+            PromptGroups[name] = nil
+        end
+    end
+
+    function DisablePromptGroup(name)
+        if PromptGroups and PromptGroups[name] then
+
+            for k,v in pairs(PromptGroups[name].prompts) do
+                Citizen.InvokeNative(0x8A0FB4D03A630D21, v.prompt, false)
+                Citizen.InvokeNative(0x71215ACCFDE075EE, v.prompt, false)
+            end
+
+            PromptGroups[name].active = false
+        end
+    end
+
+    function ResetPromptCoords(name, newCoords, newArgs)
+        if PromptGroups and PromptGroups[name] then
+            PromptGroups[name].coords = newCoords
+            PromptGroups[name].active = true
+            for k,v in pairs(PromptGroups[name].prompts) do
+                v.options.args = newArgs
+                Citizen.InvokeNative(0x8A0FB4D03A630D21, v.prompt, true)
+                Citizen.InvokeNative(0x71215ACCFDE075EE, v.prompt, true)
+            end
+        end
+    end
+
+    local function executeOptions(options)
+        if (options.args == nil) then
+            TriggerEvent(options.event)
+        else
+            TriggerEvent(options.event, table.unpack(options.args))
+        end
+    end
+
+    CreateThread(function()
+        while true do
+            local sleep = 1000
+            if (next(PromptGroups) ~= nil) then
+                local coords = GetEntityCoords(cache.ped, true)
+                for k,v in pairs(PromptGroups) do
+                    local distance = #(coords - v.coords)
+                    local promptGroup = PromptGroups[k].group
+                    if (distance < 2.5) then
+                        sleep = 1
+                        if (PromptGroups[k].created == false) then
+                            setupPromptGroup(PromptGroups[k])
+                            PromptGroups[k].active = true
+                        end
+                        
+                        if (PromptGroups[k].active) then
+
+                            Citizen.InvokeNative(0xC65A45D4453C2627, promptGroup, CreateVarString(10, 'LITERAL_STRING', PromptGroups[k].label), 1)
+
+                            for i,j in pairs(PromptGroups[k].prompts) do
+                                if (Citizen.InvokeNative(0xE0F65F0640EF0617, j.prompt)) then
+                                    executeOptions(j.options)
+                                end
+                            end
+
+                        end
+                    else
+                        if (PromptGroups[k].active) then
+                            for i,j in pairs(PromptGroups[k].prompts) do
+                                j.prompt = nil
+                            end
+                            PromptGroups[k].active = false
+                        end
+                    end
+                end
+            end
+            Wait(sleep)
+        end
+    end)
+
+end
+
+--------------------------
+-- action events
+--------------------------
+
+AddEventHandler("hdrp-tricktreat:trickAction", function(ped, treat, trick, chance)
+    if hasInteracted then
+        lib.notify({ title = 'You have already interacted!', description = 'You cannot select again.', type = 'error', duration = 5000 })
+        return
+    else
+        if not Config.UseTarget then
+            DisablePromptGroup("trickAndTreats")
+        end
+        hasInteracted = true
+        if chance >= (100 - Config.Trollprevent) then
+            lib.notify({ title = 'I\'m not in the mood, this is what you got..', type = 'error', duration = 5000 })
+            npcGiveObject(ped, treat, trick, 'Treat')
+            StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
+            TriggerServerEvent('hdrp-tricktreat:server:givetreat')
+        else
+            npcGiveObject(ped, trick, treat, 'Trick')
+            StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
+            TriggerEvent('hdrp-tricktreat:client:eventsHalloween')
+        end
+        ClearPedSecondaryTask(ped)
+        SetEntityAsNoLongerNeeded(ped)
+        Wait(10000)
+        if DoesEntityExist(ped) then
+            if Config.FadeIn then
+                for i = 255, 0, -51 do
+                    Wait(50)
+                    SetEntityAlpha(ped, i, false)
+                end
+            end
+            DeleteEntity(ped)
+            ped = nil
+            hasInteracted = false
+        end
+    end
+end)
+
+AddEventHandler("hdrp-tricktreat:treatAction", function(ped, treat, trick, chance)
+    print(ped, treat, trick, chance)
+    if hasInteracted then
+        lib.notify({ title = 'You have already interacted!', description = 'You cannot select again.', type = 'error', duration = 5000 })
+        return
+    else
+        if not Config.UseTarget then
+            DisablePromptGroup("trickAndTreats")
+        end
+        hasInteracted = true
+        if chance >= (100 - Config.Trollprevent) then
+            lib.notify({ title = 'Halloween is the one night where the impossible becomes possible, and magic dances in the air', type = 'error', duration = 10000 })
+            npcGiveObject(ped, trick, treat, 'Trick')
+            StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
+            TriggerEvent('hdrp-tricktreat:client:eventsHalloween')
+        else
+            npcGiveObject(ped, treat, trick, 'Treat')
+            StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
+            TriggerServerEvent('hdrp-tricktreat:server:givetreat')
+        end
+        ClearPedSecondaryTask(ped)
+
+        SetEntityAsNoLongerNeeded(ped)
+        Wait(10000)
+        if DoesEntityExist(ped) then
+            if Config.FadeIn then
+                for i = 255, 0, -51 do
+                    Wait(50)
+                    SetEntityAlpha(ped, i, false)
+                end
+            end
+            DeleteEntity(ped)
+            ped = nil
+            hasInteracted = false
+            
+        end
+    end
+end)
+
 --------------------------
 -- selected action
 --------------------------
+
 local function addCardTarget(ped, trick, treat)
     hasInteracted = false
     lib.notify({ title = 'Trick or Treat!', description = 'selected option!', type = 'error', duration = 7000 })
     local chance = math.random(1, 100)
     CreateThread(function()
         if DoesEntityExist(ped) then
-                exports['rsg-target']:AddTargetEntity(ped, {
-                    options = {
-                        {
-                            icon = 'fa-solid fa-eye',
-                            label = 'Trick',
-                            action = function()
-                                if hasInteracted then
-                                    lib.notify({ title = 'You have already interacted!', description = 'You cannot select again.', type = 'error', duration = 5000 })
-                                    return
-                                else
-                                    hasInteracted = true
-                                    if chance >= (100 - Config.Trollprevent) then
-                                        lib.notify({ title = 'I\'m not in the mood, this is what you got..', type = 'error', duration = 5000 })
-                                        npcGiveObject(ped, treat, trick, 'Treat')
-                                        StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
-                                        TriggerServerEvent('hdrp-tricktreat:server:givetreat')
-                                    else
-                                        npcGiveObject(ped, trick, treat, 'Trick')
-                                        StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
-                                        TriggerEvent('hdrp-tricktreat:client:eventsHalloween')
-                                    end
-                                    ClearPedSecondaryTask(ped)
-                                    SetEntityAsNoLongerNeeded(ped)
-                                    Wait(10000)
-                                    if DoesEntityExist(ped) then
-                                        if Config.FadeIn then
-                                            for i = 255, 0, -51 do
-                                                Wait(50)
-                                                SetEntityAlpha(ped, i, false)
-                                            end
-                                        end
-                                        DeleteEntity(ped)
-                                        ped = nil
-                                        hasInteracted = false
-                                    end
-                                end
-                            end
-                        },
-                        {
-                            icon = 'fa-solid fa-eye',
-                            label = 'Treat',
-                            action = function()
-                                if hasInteracted then
-                                    lib.notify({ title = 'You have already interacted!', description = 'You cannot select again.', type = 'error', duration = 5000 })
-                                    return
-                                else
-                                    hasInteracted = true
-                                    if chance >= (100 - Config.Trollprevent) then
-                                        lib.notify({ title = 'Halloween is the one night where the impossible becomes possible, and magic dances in the air', type = 'error', duration = 10000 })
-                                        npcGiveObject(ped, trick, treat, 'Trick')
-                                        StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
-                                        TriggerEvent('hdrp-tricktreat:client:eventsHalloween')
-                                    else
-                                        npcGiveObject(ped, treat, trick, 'Treat')
-                                        StopAnimation(ped,'script_proc@robberies@homestead@lonnies_shack@deception', 'hands_up_loop')
-                                        TriggerServerEvent('hdrp-tricktreat:server:givetreat')
-                                    end
-                                    ClearPedSecondaryTask(ped)
-
-                                    SetEntityAsNoLongerNeeded(ped)
-                                    Wait(10000)
-                                    if DoesEntityExist(ped) then
-                                        if Config.FadeIn then
-                                            for i = 255, 0, -51 do
-                                                Wait(50)
-                                                SetEntityAlpha(ped, i, false)
-                                            end
-                                        end
-                                        DeleteEntity(ped)
-                                        ped = nil
-                                        hasInteracted = false
-                                    end
-                                end
-                            end
-                        }
+            exports['rsg-target']:AddTargetEntity(ped, {
+                options = {
+                    {
+                        icon = 'fa-solid fa-eye',
+                        label = 'Trick',
+                        action = function()
+                            TriggerEvent("hdrp-tricktreat:trickAction", ped, treat, trick, chance)
+                        end
                     },
-                    distance = 2.5 -- Distancia en la que el jugador puede interactuar con la carta
-                })
+                    {
+                        icon = 'fa-solid fa-eye',
+                        label = 'Treat',
+                        action = function()
+                            TriggerEvent("hdrp-tricktreat:treatAction", ped, treat, trick, chance)
+                        end
+                    }
+                },
+                distance = 2.5 -- Distancia en la que el jugador puede interactuar con la carta
+            })
         end
     end)
 end
 
+function addCardPrompt(ped, trick, treat)
+    hasInteracted = false
+    lib.notify({ title = 'Trick or Treat!', description = 'selected option!', type = 'error', duration = 7000 })
+    local chance = math.random(1, 100)
+    CreateThread(function()
+        if DoesEntityExist(ped) then
+            if not PromptGroupHasBeenCreated("trickAndTreats") then
+                CreatePromptGroup("trickAndTreats", "Trick And Treat", GetEntityCoords(ped), {
+                    {
+                        key = RSGCore.Shared.Keybinds["J"],
+                        text = "trick",
+                        options = {
+                            event = 'hdrp-tricktreat:trickAction',
+                            args = {ped, treat, trick, chance},
+                        },
+                    },
+                    {
+                        key = RSGCore.Shared.Keybinds["G"],
+                        text = "treat",
+                        options = {
+                            event = 'hdrp-tricktreat:treatAction',
+                            args = {ped, treat, trick, chance},
+                        }
+                    }
+                })
+            else
+                ResetPromptCoords(
+                    "trickAndTreats", -- group name
+                    GetEntityCoords(ped), -- newCoords to prompt
+                    {ped, treat, trick, chance} -- new Args to prompt
+                )
+            end
+        end
+    end)
+end
 ---------------------
 -- start interactions
 ---------------------
@@ -300,7 +487,11 @@ local function HandleDoorKnock(door)
         if spawnedPed and DoesEntityExist(spawnedPed) then
             local trick, treat = NearProp(spawnedPed)
             Wait(100)
-            addCardTarget(spawnedPed, trick, treat)
+            if Config.UseTarget then
+                addCardTarget(spawnedPed, trick, treat)
+            else
+                addCardPrompt(spawnedPed, trick, treat)
+            end
         end
     end
 
@@ -335,6 +526,7 @@ AddEventHandler('hdrp-tricktreat:client:knockOnDoor', function()
     if not doorFound then
         lib.notify({ title = 'Something went wrong!', type = 'error', duration = 7000 })
     end
+    
 end)
 
 local zone = 0
@@ -342,22 +534,30 @@ CreateThread(function()
     for k, v in pairs(Config.Doors) do
         zone = zone + 1
         if not isInteracting then
-            exports['rsg-target']:AddBoxZone(tostring(zone), v.coords, 2.0, 2.0, {
-                name = tostring(zone),
-                heading = 0,
-                debugPoly = false,
-                minZ = v.coords.z - 1.0,
-                maxZ = v.coords.z + 1.0
-            }, {
-                options = {
-                    {
-                        event = 'hdrp-tricktreat:client:knockOnDoor',
-                        icon = 'fas fa-door',
-                        label = 'Knock',
+            if Config.UseTarget then
+                exports['rsg-target']:AddBoxZone(tostring(zone), v.coords, 2.0, 2.0, {
+                    name = tostring(zone),
+                    heading = 0,
+                    debugPoly = false,
+                    minZ = v.coords.z - 1.0,
+                    maxZ = v.coords.z + 1.0
+                }, {
+                    options = {
+                        {
+                            event = 'hdrp-tricktreat:client:knockOnDoor',
+                            icon = 'fas fa-door',
+                            label = 'Knock',
+                        },
                     },
-                },
-                distance = 2.0
-            })
+                    distance = 2.0
+                })
+            else
+                exports['rsg-core']:createPrompt("KnockDoor"..tostring(zone), v.coords, RSGCore.Shared.Keybinds["G"], 'Knock', {
+                    type = 'client',
+                    event = 'hdrp-tricktreat:client:knockOnDoor',
+                    args = {zone},
+                })
+            end
         else
         end
     end
@@ -387,6 +587,7 @@ end)
 --------------------------------------
 AddEventHandler("onResourceStop", function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
+
     for k, v in pairs(spawnedPeds) do
         if v.ped and DoesEntityExist(v.ped) then
             DeleteEntity(v.ped)
@@ -394,12 +595,22 @@ AddEventHandler("onResourceStop", function(resourceName)
         spawnedPeds[k] = nil
     end
     for k, v in pairs(spawnedProps) do
+
         if v.treat and DoesEntityExist(v.treat) then
             DeleteEntity(v.treat)
         end
         if v.trick and DoesEntityExist(v.trick) then
             DeleteEntity(v.trick)
         end
+
         spawnedProps[k] = nil
     end
+    
+    if not Config.UseTarget then
+        DeletePromptGroup("trickAndTreats")
+        for i= 1, zone do
+            exports['rsg-core']:deletePrompt("KnockDoor"..tostring(i))
+        end
+    end
+
 end)
